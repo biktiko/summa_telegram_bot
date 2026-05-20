@@ -10,7 +10,7 @@ function parseTransactionMessage(message) {
     const parts = message.trim().split(/\s+/);
 
     if (parts.length < 2) {
-        throw new Error("Сообщение слишком короткое. Формат: <Сумма> <Категория> [Название]");
+        throw new Error("Сообщение слишком короткое. Пример: 1500 Кофе");
     }
 
     // 1. Извлекаем сумму (первое слово)
@@ -20,25 +20,16 @@ function parseTransactionMessage(message) {
         throw new Error(`Не удалось распознать сумму: ${amountRaw}`);
     }
 
-    // 2. Извлекаем категорию и название
-    let categoryName = "";
-    let description = "";
-
-    if (parts.length === 2) {
-        // "1000 Еда" -> Сумма и категория, без названия
-        categoryName = parts[1];
-        description = categoryName; // Если нет названия, используем категорию как название
-    } else {
-        // "1000 Еда Бургер Кинг"
-        categoryName = parts[1];
-        description = parts.slice(2).join(" ");
-    }
+    const possibleCategory = parts[1];
+    const possibleDescription = parts.slice(2).join(" ") || possibleCategory;
+    const fullText = parts.slice(1).join(" ");
 
     return {
         amount,
-        categoryName,
-        description,
-        type: 'expense' // По умолчанию считаем расходом. Если нужно, можно добавить проверку на знак "-" или "+"
+        possibleCategory,
+        possibleDescription,
+        fullText,
+        type: 'expense' // По умолчанию считаем расходом.
     };
 }
 

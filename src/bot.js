@@ -1,4 +1,4 @@
-const { Telegraf } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
 require('dotenv').config();
 
 const { parseTransactionMessage } = require('./parser');
@@ -7,26 +7,36 @@ const {
     linkTelegramToFirebase, 
     getBalance, 
     getCategories, 
-    createTransaction 
+    createTransaction,
+    commitTransaction,
+    deleteTransaction,
+    getRecentTransactions
 } = require('./firebase');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// Middleware для проверки авторизации
+// Главное меню
+const mainMenu = Markup.keyboard([
+    ['💰 Добавить', '📊 Баланс'],
+    ['📜 Последние', '📂 Категории']
+]).resize();
+
 const authMiddleware = async (ctx, next) => {
-    // Пропускаем команду /start
     if (ctx.message && ctx.message.text && ctx.message.text.startsWith('/start')) {
         return next();
     }
     
+    // Callback query also has ctx.from.id
     const telegramId = ctx.from.id;
     const userId = await getUserIdByTelegramId(telegramId);
     
     if (!userId) {
-        return ctx.reply('Вы не авторизованы. Пожалуйста, введите ваш код из приложения Summa: /start <Ваш_Код_Или_Firebase_UID>');
+        if (ctx.callbackQuery) {
+            return ctx.answerCbQuery('Вы не авторизованы. Отправьте /start <код>', { show_alert: true });
+        }
+        return ctx.reply('Вы не авторизованы. Пожалуйста, введите ваш код из приложения Summa: /start <Ваш_Код>', Markup.removeKeyboard());
     }
     
-    // Сохраняем userId в контексте, чтобы не запрашивать базу снова
     ctx.state.userId = userId;
     return next();
 };
@@ -41,22 +51,20 @@ bot.start(async (ctx) => {
         const firebaseUid = args[0];
         try {
             await linkTelegramToFirebase(telegramId, firebaseUid);
-            ctx.reply('✅ Ваш Telegram успешно привязан к аккаунту Summa!\n\nИспользуйте команду /help для просмотра возможностей бота.');
+            ctx.reply('✅ Ваш Telegram успешно привязан!\n\nИспользуйте меню ниже для работы.', mainMenu);
         } catch (e) {
             ctx.reply(`❌ Ошибка при привязке аккаунта: ${e.message}`);
         }
     } else {
         const userId = await getUserIdByTelegramId(telegramId);
         if (userId) {
-            ctx.reply('Вы уже авторизованы. Можете отправлять транзакции!\nФормат: <Сумма> <Категория> <Название>');
+            ctx.reply('Вы авторизованы и можете отправлять транзакции!\nФормат: 1500 Кофе', mainMenu);
         } else {
             ctx.reply(
-                `Привет! Я бот для быстрого добавления транзакций в Summa.\n\n` +
-                `Ваш Telegram ID: \`${telegramId}\`\n\n` +
+                `Привет! Я бот Summa.\n\n` +
                 `Чтобы авторизоваться, отправьте мне команду:\n` +
-                `/start <Ваш_Firebase_UID_или_Код>\n\n` +
-                `(В будущем вы сможете ввести ваш Telegram ID в настройках Summa).`, 
-                { parse_mode: 'Markdown' }
+                `/start <Ваш_Код_Из_Приложения>`, 
+                Markup.removeKeyboard()
             );
         }
     }
@@ -64,58 +72,144 @@ bot.start(async (ctx) => {
 
 bot.help((ctx) => {
     ctx.reply(
-        `📌 *Как использовать бота:*\n\n` +
-        `Просто отправьте сообщение в формате:\n` +
-        `\`<Сумма> <Категория> <Название>\`\n\n` +
-        `*Примеры:*\n` +
-        `\`150 Еда Кофе\`\n` +
-        `\`5000 Продукты Супермаркет\`\n\n` +
-        `*Доступные команды:*\n` +
-        `/balance - Посмотреть баланс счетов\n` +
-        `/categories - Посмотреть список ваших категорий\n` +
-        `/help - Показать эту справку`,
-        { parse_mode: 'Markdown' }
+        `📌 *Как добавить транзакцию:*\n\n` +
+        `1. Просто отправьте сумму и описание: \`1500 Супермаркет\`\n` +
+        `Бот сам предложит выбрать категорию.\n\n` +
+        `2. Или укажите категорию сразу: \`1500 Продукты Супермаркет\`\n\n` +
+        `Используйте меню ниже для быстрого доступа к функциям.`,
+        { parse_mode: 'Markdown', ...mainMenu }
     );
 });
 
-bot.command('balance', async (ctx) => {
+// Обработчики кнопок меню
+bot.hears('💰 Добавить', (ctx) => {
+    ctx.reply('Просто отправьте мне сумму и описание (например: 1500 Продукты)', mainMenu);
+});
+
+bot.hears('📊 Баланс', async (ctx) => {
     try {
-        const userId = ctx.state.userId;
-        const balanceText = await getBalance(userId);
-        ctx.reply(balanceText);
+        const balanceText = await getBalance(ctx.state.userId);
+        ctx.reply(balanceText, mainMenu);
     } catch (e) {
-        ctx.reply(`❌ Ошибка получения баланса: ${e.message}`);
+        ctx.reply(`❌ Ошибка: ${e.message}`);
     }
 });
 
-bot.command('categories', async (ctx) => {
+bot.hears('📂 Категории', async (ctx) => {
     try {
-        const userId = ctx.state.userId;
-        const catText = await getCategories(userId);
-        ctx.reply(catText);
+        const catText = await getCategories(ctx.state.userId);
+        ctx.reply(catText, mainMenu);
     } catch (e) {
-        ctx.reply(`❌ Ошибка получения категорий: ${e.message}`);
+        ctx.reply(`❌ Ошибка: ${e.message}`);
     }
 });
 
+bot.hears('📜 Последние', async (ctx) => {
+    try {
+        const transactions = await getRecentTransactions(ctx.state.userId);
+        if (transactions.length === 0) {
+            return ctx.reply('У вас пока нет транзакций.', mainMenu);
+        }
+        
+        await ctx.reply('Ваши последние транзакции:', mainMenu);
+        for (const tx of transactions) {
+            const sign = tx.type === 'income' ? '+' : '-';
+            const text = `${sign}${tx.amount} (${tx.description || 'Без описания'})\n📅 ${tx.date}`;
+            
+            const keyboard = Markup.inlineKeyboard([
+                Markup.button.callback('🗑 Удалить', `del_${tx.id}`)
+            ]);
+            await ctx.reply(text, keyboard);
+        }
+    } catch (e) {
+        ctx.reply(`❌ Ошибка: ${e.message}`);
+    }
+});
+
+// Обработка текстовых сообщений (Добавление транзакции)
 bot.on('text', async (ctx) => {
     const text = ctx.message.text;
     const userId = ctx.state.userId;
 
     try {
         const parsed = parseTransactionMessage(text);
-        const resultMsg = await createTransaction(userId, parsed);
-        ctx.reply(resultMsg);
+        const response = await createTransaction(userId, parsed);
+        
+        if (response.needsCategorySelection) {
+            // Формируем Inline клавиатуру с категориями
+            const buttons = response.categories.map(cat => {
+                const prefix = cat.type === 'income' ? '🟢' : '🔴';
+                return Markup.button.callback(`${prefix} ${cat.label}`, `cat_${response.draftId}_${cat.id}`);
+            });
+            
+            // Разбиваем кнопки по 2 в ряд
+            const rows = [];
+            for (let i = 0; i < buttons.length; i += 2) {
+                rows.push(buttons.slice(i, i + 2));
+            }
+            
+            await ctx.reply(`Выберите категорию для суммы ${parsed.amount} (${parsed.fullText || 'Без описания'}):`, Markup.inlineKeyboard(rows));
+        } else {
+            // Транзакция сразу сохранена
+            const { message, transactionId } = response.result;
+            const keyboard = Markup.inlineKeyboard([
+                Markup.button.callback('❌ Отменить', `undo_${transactionId}`)
+            ]);
+            await ctx.reply(message, keyboard);
+        }
     } catch (e) {
-        ctx.reply(`❌ Ошибка: ${e.message}\n\nФормат: <Сумма> <Категория> <Название>`);
+        ctx.reply(`❌ Ошибка: ${e.message}\n\nПопробуйте просто: 1500 Кофе`);
     }
 });
 
-// Глобальный обработчик ошибок
+// Обработка выбора категории (Inline Keyboard)
+bot.action(/^cat_(.+)_(.+)$/, async (ctx) => {
+    const draftId = ctx.match[1];
+    const categoryId = ctx.match[2];
+    const userId = ctx.state.userId;
+
+    try {
+        const result = await commitTransaction(userId, draftId, categoryId);
+        
+        const keyboard = Markup.inlineKeyboard([
+            Markup.button.callback('❌ Отменить', `undo_${result.transactionId}`)
+        ]);
+        await ctx.editMessageText(result.message, keyboard);
+    } catch (e) {
+        await ctx.answerCbQuery(e.message, { show_alert: true });
+        await ctx.editMessageText(`❌ Ошибка: ${e.message}`);
+    }
+});
+
+// Обработка кнопки Отменить (сразу после добавления)
+bot.action(/^undo_(.+)$/, async (ctx) => {
+    const transactionId = ctx.match[1];
+    const userId = ctx.state.userId;
+
+    try {
+        const msg = await deleteTransaction(userId, transactionId);
+        await ctx.editMessageText(msg); 
+    } catch (e) {
+        await ctx.answerCbQuery(e.message, { show_alert: true });
+    }
+});
+
+// Обработка кнопки Удалить (из списка последних)
+bot.action(/^del_(.+)$/, async (ctx) => {
+    const transactionId = ctx.match[1];
+    const userId = ctx.state.userId;
+
+    try {
+        const msg = await deleteTransaction(userId, transactionId);
+        await ctx.editMessageText(msg);
+    } catch (e) {
+        await ctx.answerCbQuery(e.message, { show_alert: true });
+    }
+});
+
 bot.catch((err, ctx) => {
     console.error(`Ooops, encountered an error for ${ctx.updateType}`, err);
     ctx.reply('❌ Произошла непредвиденная ошибка на сервере бота.');
 });
 
-// Экспорт бота для использования в локальном сервере или в Vercel Webhook
 module.exports = bot;
