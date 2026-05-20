@@ -1,13 +1,18 @@
 require('dotenv').config();
 const bot = require('./src/bot');
 
-console.log('Бот запускается в режиме long-polling...');
+console.log('Удаляем вебхук (если есть) и запускаем бот в режиме long-polling...');
 
-bot.launch().then(() => {
-    console.log('Бот успешно запущен!');
-}).catch((err) => {
-    console.error('Ошибка при запуске бота:', err);
-});
+bot.telegram.deleteWebhook()
+    .then(() => {
+        return bot.launch();
+    })
+    .then(() => {
+        console.log('Бот успешно запущен!');
+    })
+    .catch((err) => {
+        console.error('Ошибка при запуске бота:', err);
+    });
 
 // Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));

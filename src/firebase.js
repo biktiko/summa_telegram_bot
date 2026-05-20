@@ -56,8 +56,9 @@ async function getBalance(userId) {
     let total = 0;
     snapshot.forEach(doc => {
         const data = doc.data();
-        balanceText += `- ${data.name || data.label}: ${data.balance} ${data.currency || ''}\n`;
-        total += (data.balance || 0);
+        const bal = data.balance !== undefined && data.balance !== null ? data.balance : 0;
+        balanceText += `- ${data.name || data.label}: ${bal} ${data.currency || ''}\n`;
+        total += bal;
     });
     balanceText += `\nОбщий баланс: ${total}`;
     return balanceText;
@@ -69,7 +70,7 @@ async function getCategories(userId) {
     let catText = 'Ваши категории:\n';
     snapshot.forEach(doc => {
         const data = doc.data();
-        catText += `- ${data.label} (${data.type === 'income' ? 'Доход' : 'Расход'})\n`;
+        catText += `- ${data.label}\n`;
     });
     return catText;
 }
@@ -121,11 +122,12 @@ async function getBudgetProgress(userId, categoryId) {
     return text;
 }
 
-async function createDraftTransaction(userId, amount, description) {
+async function createDraftTransaction(userId, amount, description, possibleCategory = null) {
     const docRef = await db.collection('transaction_drafts').add({
         userId,
         amount,
         description,
+        possibleCategory,
         createdAt: new Date().toISOString()
     });
     return docRef.id;
@@ -201,18 +203,63 @@ async function createTransaction(userId, parsedData) {
     }
 
     if (matchedCategory) {
+        const result = await _finalizeTransaction(userId, parsedData.amount, parsedData.possibleDescription, matchedCategory.id);
         return {
-            needsCategorySelection: false,
-            result: await _finalizeTransaction(userId, parsedData.amount, parsedData.possibleDescription, matchedCategory.id)
+            status: 'success',
+            result
+        };
+    } else if (parsedData.possibleCategory) {
+        // Категория указана, но не найдена
+        const draftId = await createDraftTransaction(
+            userId, 
+            parsedData.amount, 
+            parsedData.possibleDescription, 
+            parsedData.possibleCategory
+        );
+        return {
+            status: 'ask_create_category',
+            draftId,
+            categoryName: parsedData.possibleCategory
         };
     } else {
-        const draftId = await createDraftTransaction(userId, parsedData.amount, parsedData.fullText);
+        // Категория не указана
+        const draftId = await createDraftTransaction(userId, parsedData.amount, parsedData.possibleDescription || '');
         return {
-            needsCategorySelection: true,
+            status: 'needs_category',
             draftId,
             categories
         };
     }
+}
+
+async function addNewCategoryAndCommit(userId, draftId) {
+    const draftDoc = await db.collection('transaction_drafts').doc(draftId).get();
+    if (!draftDoc.exists) throw new Error("Время выбора истекло или черновик устарел.");
+    
+    const { amount, description, possibleCategory, userId: draftUserId } = draftDoc.data();
+    if (userId !== draftUserId) throw new Error("Нет доступа.");
+    if (!possibleCategory) throw new Error("Имя категории не найдено в черновике.");
+
+    // Создаем новую категорию
+    const newCatRef = await db.collection('categories').add({
+        userId,
+        label: possibleCategory,
+        type: 'expense',
+        createdAt: new Date().toISOString()
+    });
+    await newCatRef.update({ id: newCatRef.id });
+
+    // Финализируем транзакцию
+    const result = await _finalizeTransaction(userId, amount, description, newCatRef.id);
+
+    // Удаляем черновик
+    await db.collection('transaction_drafts').doc(draftId).delete();
+
+    return {
+        categoryName: possibleCategory,
+        message: `✅ Создана новая категория "${possibleCategory}"!\n\n${result.message}`,
+        transactionId: result.transactionId
+    };
 }
 
 async function deleteTransaction(userId, transactionId) {
@@ -238,13 +285,18 @@ async function deleteTransaction(userId, transactionId) {
 async function getRecentTransactions(userId) {
     const snapshot = await db.collection('transactions')
         .where('userId', '==', userId)
-        .orderBy('createdAt', 'desc')
-        .limit(5)
         .get();
         
     if (snapshot.empty) return [];
     
-    return snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    const txs = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+    txs.sort((a, b) => {
+        const dateA = a.createdAt || '';
+        const dateB = b.createdAt || '';
+        return dateB.localeCompare(dateA);
+    });
+    
+    return txs.slice(0, 5);
 }
 
 module.exports = {
@@ -255,5 +307,6 @@ module.exports = {
     createTransaction,
     commitTransaction,
     deleteTransaction,
-    getRecentTransactions
+    getRecentTransactions,
+    addNewCategoryAndCommit
 };

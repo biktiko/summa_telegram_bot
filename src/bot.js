@@ -10,7 +10,8 @@ const {
     createTransaction,
     commitTransaction,
     deleteTransaction,
-    getRecentTransactions
+    getRecentTransactions,
+    addNewCategoryAndCommit
 } = require('./firebase');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -140,7 +141,23 @@ bot.on('text', async (ctx) => {
         const parsed = parseTransactionMessage(text);
         const response = await createTransaction(userId, parsed);
         
-        if (response.needsCategorySelection) {
+        if (response.status === 'success') {
+            // Транзакция сразу сохранена
+            const { message, transactionId } = response.result;
+            const keyboard = Markup.inlineKeyboard([
+                Markup.button.callback('❌ Отменить', `undo_${transactionId}`)
+            ]);
+            await ctx.reply(message, keyboard);
+        } else if (response.status === 'ask_create_category') {
+            // Категория указана, но не найдена
+            const keyboard = Markup.inlineKeyboard([
+                [
+                    Markup.button.callback('✅ Да', `createcat_yes_${response.draftId}`),
+                    Markup.button.callback('❌ Нет', `createcat_no_${response.draftId}`)
+                ]
+            ]);
+            await ctx.reply(`⚠️ Категория "${response.categoryName}" не найдена. Создать её?`, keyboard);
+        } else if (response.status === 'needs_category') {
             // Формируем Inline клавиатуру с категориями
             const buttons = response.categories.map(cat => {
                 const prefix = cat.type === 'income' ? '🟢' : '🔴';
@@ -153,17 +170,54 @@ bot.on('text', async (ctx) => {
                 rows.push(buttons.slice(i, i + 2));
             }
             
-            await ctx.reply(`Выберите категорию для суммы ${parsed.amount} (${parsed.fullText || 'Без описания'}):`, Markup.inlineKeyboard(rows));
-        } else {
-            // Транзакция сразу сохранена
-            const { message, transactionId } = response.result;
-            const keyboard = Markup.inlineKeyboard([
-                Markup.button.callback('❌ Отменить', `undo_${transactionId}`)
-            ]);
-            await ctx.reply(message, keyboard);
+            const descText = parsed.possibleDescription ? ` (${parsed.possibleDescription})` : '';
+            await ctx.reply(`Выберите категорию для суммы ${parsed.amount}${descText}:`, Markup.inlineKeyboard(rows));
         }
     } catch (e) {
         ctx.reply(`❌ Ошибка: ${e.message}\n\nПопробуйте просто: 1500 Кофе`);
+    }
+});
+
+// Обработка выбора создания новой категории (Да)
+bot.action(/^createcat_yes_(.+)$/, async (ctx) => {
+    const draftId = ctx.match[1];
+    const userId = ctx.state.userId;
+
+    try {
+        const result = await addNewCategoryAndCommit(userId, draftId);
+        const keyboard = Markup.inlineKeyboard([
+            Markup.button.callback('❌ Отменить', `undo_${result.transactionId}`)
+        ]);
+        await ctx.editMessageText(result.message, keyboard);
+    } catch (e) {
+        await ctx.answerCbQuery(e.message.substring(0, 150), { show_alert: true });
+        await ctx.editMessageText(`❌ Ошибка: ${e.message}`);
+    }
+});
+
+// Обработка выбора создания новой категории (Нет - показать список)
+bot.action(/^createcat_no_(.+)$/, async (ctx) => {
+    const draftId = ctx.match[1];
+    const userId = ctx.state.userId;
+
+    try {
+        const { getUserCategoriesList } = require('./firebase');
+        const categories = await getUserCategoriesList(userId);
+        
+        const buttons = categories.map(cat => {
+            const prefix = cat.type === 'income' ? '🟢' : '🔴';
+            return Markup.button.callback(`${prefix} ${cat.label}`, `cat_${draftId}_${cat.id}`);
+        });
+        
+        const rows = [];
+        for (let i = 0; i < buttons.length; i += 2) {
+            rows.push(buttons.slice(i, i + 2));
+        }
+
+        await ctx.editMessageText('Хорошо, выберите категорию вручную из списка ниже:', Markup.inlineKeyboard(rows));
+    } catch (e) {
+        await ctx.answerCbQuery(e.message.substring(0, 150), { show_alert: true });
+        await ctx.editMessageText(`❌ Ошибка: ${e.message}`);
     }
 });
 

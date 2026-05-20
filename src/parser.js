@@ -9,8 +9,8 @@ function parseTransactionMessage(message) {
     // Убираем лишние пробелы
     const parts = message.trim().split(/\s+/);
 
-    if (parts.length < 2) {
-        throw new Error("Сообщение слишком короткое. Пример: 1500 Кофе");
+    if (parts.length === 0 || parts[0] === '') {
+        throw new Error("Введите сумму. Например: 1500");
     }
 
     // 1. Извлекаем сумму (первое слово)
@@ -18,6 +18,17 @@ function parseTransactionMessage(message) {
     const amount = parseFloat(amountRaw);
     if (isNaN(amount)) {
         throw new Error(`Не удалось распознать сумму: ${amountRaw}`);
+    }
+
+    if (parts.length === 1) {
+        // Только сумма, без категории или описания
+        return {
+            amount,
+            possibleCategory: null,
+            possibleDescription: "",
+            fullText: "",
+            type: 'expense' // По умолчанию считаем расходом.
+        };
     }
 
     const possibleCategory = parts[1];
