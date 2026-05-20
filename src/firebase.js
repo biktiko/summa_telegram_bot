@@ -49,9 +49,41 @@ async function linkTelegramToFirebase(telegramId, firebaseUid) {
     }
 }
 
+async function calculateAccountBalances(userId) {
+    const accountsSnapshot = await db.collection('accounts').where('userId', '==', userId).get();
+    if (accountsSnapshot.empty) return [];
+
+    const txSnapshot = await db.collection('transactions').where('userId', '==', userId).get();
+    const transactions = txSnapshot.docs.map(doc => doc.data());
+
+    return accountsSnapshot.docs.map(doc => {
+        const accountData = doc.data();
+        const accountId = doc.id;
+        
+        let balance = Number(accountData.initialBalance) || 0;
+        
+        transactions.forEach(t => {
+            if (t.accountId === accountId) {
+                if (t.type === 'income') balance += Number(t.amount);
+                else if (t.type === 'expense') balance -= Number(t.amount);
+                else if (t.type === 'transfer') balance -= Number(t.amount);
+            }
+            if (t.toAccountId === accountId && t.type === 'transfer') {
+                balance += Number(t.amount);
+            }
+        });
+        
+        return {
+            id: accountId,
+            ...accountData,
+            balance: balance
+        };
+    });
+}
+
 async function getBalance(userId) {
-    const snapshot = await db.collection('accounts').where('userId', '==', userId).get();
-    if (snapshot.empty) return 'У вас нет добавленных счетов.';
+    const accounts = await calculateAccountBalances(userId);
+    if (accounts.length === 0) return 'У вас нет добавленных счетов.';
     
     let selectedAccountId = null;
     const telegramUserSnapshot = await db.collection('telegram_users').where('firebase_uid', '==', userId).get();
@@ -61,11 +93,10 @@ async function getBalance(userId) {
 
     let balanceText = 'Ваши счета:\n';
     let total = 0;
-    snapshot.forEach(doc => {
-        const data = doc.data();
-        const bal = data.balance !== undefined && data.balance !== null ? data.balance : 0;
-        const isSelected = doc.id === selectedAccountId;
-        balanceText += `${isSelected ? '⭐️ ' : '- '}${data.name || data.label || 'Без названия'}: ${bal} ${data.currency || ''}${isSelected ? ' (активный)' : ''}\n`;
+    accounts.forEach(acc => {
+        const bal = acc.balance;
+        const isSelected = acc.id === selectedAccountId;
+        balanceText += `${isSelected ? '⭐️ ' : '- '}${acc.name || acc.label || 'Без названия'}: ${bal} ${acc.currency || ''}${isSelected ? ' (активный)' : ''}\n`;
         total += bal;
     });
     balanceText += `\nОбщий баланс: ${total}`;
@@ -328,10 +359,8 @@ async function getRecentTransactions(userId) {
 }
 
 async function getUserAccounts(userId) {
-    const accountsSnapshot = await db.collection('accounts').where('userId', '==', userId).get();
-    if (accountsSnapshot.empty) return { accounts: [], selectedAccountId: null };
-    
-    const accounts = accountsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    const accounts = await calculateAccountBalances(userId);
+    if (accounts.length === 0) return { accounts: [], selectedAccountId: null };
     
     let selectedAccountId = null;
     const telegramUserSnapshot = await db.collection('telegram_users').where('firebase_uid', '==', userId).get();
