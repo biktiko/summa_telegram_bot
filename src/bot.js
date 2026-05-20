@@ -83,7 +83,12 @@ bot.help((ctx) => {
 
 // Обработчики кнопок меню
 bot.hears('💰 Добавить', (ctx) => {
-    ctx.reply('Просто отправьте мне сумму и описание (например: 1500 Продукты)', mainMenu);
+    ctx.reply(
+        'Вы можете добавить транзакцию двумя способами:\n' +
+        '1️⃣ Просто отправьте сумму и описание (например: `1500 Кофе`). Бот сам предложит выбрать категорию.\n' +
+        '2️⃣ Укажите категорию сразу (например: `1500 Продукты Супермаркет`).',
+        { parse_mode: 'Markdown', ...mainMenu }
+    );
 });
 
 bot.hears('📊 Баланс', async (ctx) => {
@@ -176,7 +181,7 @@ bot.action(/^cat_(.+)_(.+)$/, async (ctx) => {
         ]);
         await ctx.editMessageText(result.message, keyboard);
     } catch (e) {
-        await ctx.answerCbQuery(e.message, { show_alert: true });
+        await ctx.answerCbQuery(e.message.substring(0, 150), { show_alert: true });
         await ctx.editMessageText(`❌ Ошибка: ${e.message}`);
     }
 });

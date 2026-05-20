@@ -97,16 +97,18 @@ async function getBudgetProgress(userId, categoryId) {
     const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
 
     const txSnapshot = await db.collection('transactions')
-        .where('userId', '==', userId)
         .where('categoryId', '==', categoryId)
-        .where('type', '==', 'expense')
-        .where('createdAt', '>=', startOfMonth.toISOString())
-        .where('createdAt', '<=', endOfMonth.toISOString())
         .get();
 
     let sum = 0;
+    const startIso = startOfMonth.toISOString();
+    const endIso = endOfMonth.toISOString();
+
     txSnapshot.forEach(doc => {
-        sum += Number(doc.data().amount) || 0;
+        const data = doc.data();
+        if (data.userId === userId && data.type === 'expense' && data.createdAt >= startIso && data.createdAt <= endIso) {
+            sum += Number(data.amount) || 0;
+        }
     });
 
     const percent = (sum / budgetLimit) * 100;
