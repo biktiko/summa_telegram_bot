@@ -11,7 +11,9 @@ const {
     commitTransaction,
     deleteTransaction,
     getRecentTransactions,
-    addNewCategoryAndCommit
+    addNewCategoryAndCommit,
+    getUserAccounts,
+    selectUserAccount
 } = require('./firebase');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -19,7 +21,8 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // Главное меню
 const mainMenu = Markup.keyboard([
     ['💰 Добавить', '📊 Баланс'],
-    ['📜 Последние', '📂 Категории']
+    ['📜 Последние', '📂 Категории'],
+    ['💳 Выбрать счет']
 ]).resize();
 
 const authMiddleware = async (ctx, next) => {
@@ -105,6 +108,37 @@ bot.hears('📂 Категории', async (ctx) => {
     try {
         const catText = await getCategories(ctx.state.userId);
         ctx.reply(catText, mainMenu);
+    } catch (e) {
+        ctx.reply(`❌ Ошибка: ${e.message}`);
+    }
+});
+
+bot.hears('💳 Выбрать счет', async (ctx) => {
+    try {
+        const userId = ctx.state.userId;
+        const { accounts, selectedAccountId } = await getUserAccounts(userId);
+        
+        if (accounts.length === 0) {
+            return ctx.reply('У вас нет счетов в приложении Summa. Пожалуйста, добавьте счет в приложении.', mainMenu);
+        }
+        
+        const activeAccount = accounts.find(a => a.id === selectedAccountId) || accounts[0];
+        const activeName = activeAccount ? (activeAccount.name || activeAccount.label) : 'Не выбран';
+        
+        const buttons = accounts.map(acc => {
+            const isSelected = acc.id === selectedAccountId;
+            const prefix = isSelected ? '⭐️' : '💳';
+            return Markup.button.callback(`${prefix} ${acc.name || acc.label} (${acc.balance || 0} ${acc.currency || ''})`, `selectacc_${acc.id}`);
+        });
+        
+        const rows = buttons.map(btn => [btn]);
+        
+        await ctx.reply(
+            `💳 *Ваши счета*\n\n` +
+            `Активный счет для записи транзакций: *${activeName}*\n\n` +
+            `Выберите счет ниже, чтобы сделать его активным:`,
+            { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }
+        );
     } catch (e) {
         ctx.reply(`❌ Ошибка: ${e.message}`);
     }
@@ -237,6 +271,35 @@ bot.action(/^cat_(.+)_(.+)$/, async (ctx) => {
     } catch (e) {
         await ctx.answerCbQuery(e.message.substring(0, 150), { show_alert: true });
         await ctx.editMessageText(`❌ Ошибка: ${e.message}`);
+    }
+});
+
+// Обработка выбора активного аккаунта
+bot.action(/^selectacc_(.+)$/, async (ctx) => {
+    const accountId = ctx.match[1];
+    const userId = ctx.state.userId;
+
+    try {
+        const accountName = await selectUserAccount(userId, accountId);
+        await ctx.answerCbQuery(`Активный счет изменен на: ${accountName}`);
+        
+        const { accounts, selectedAccountId } = await getUserAccounts(userId);
+        const buttons = accounts.map(acc => {
+            const isSelected = acc.id === selectedAccountId;
+            const prefix = isSelected ? '⭐️' : '💳';
+            return Markup.button.callback(`${prefix} ${acc.name || acc.label} (${acc.balance || 0} ${acc.currency || ''})`, `selectacc_${acc.id}`);
+        });
+        
+        const rows = buttons.map(btn => [btn]);
+        
+        await ctx.editMessageText(
+            `💳 *Ваши счета*\n\n` +
+            `✅ Активный счет для записи транзакций изменен на: *${accountName}*\n\n` +
+            `Выберите счет ниже, чтобы сделать его активным:`,
+            { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }
+        );
+    } catch (e) {
+        await ctx.answerCbQuery(e.message.substring(0, 150), { show_alert: true });
     }
 });
 

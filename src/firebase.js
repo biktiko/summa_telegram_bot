@@ -52,12 +52,20 @@ async function linkTelegramToFirebase(telegramId, firebaseUid) {
 async function getBalance(userId) {
     const snapshot = await db.collection('accounts').where('userId', '==', userId).get();
     if (snapshot.empty) return 'У вас нет добавленных счетов.';
+    
+    let selectedAccountId = null;
+    const telegramUserSnapshot = await db.collection('telegram_users').where('firebase_uid', '==', userId).get();
+    if (!telegramUserSnapshot.empty) {
+        selectedAccountId = telegramUserSnapshot.docs[0].data().selected_account_id || null;
+    }
+
     let balanceText = 'Ваши счета:\n';
     let total = 0;
     snapshot.forEach(doc => {
         const data = doc.data();
         const bal = data.balance !== undefined && data.balance !== null ? data.balance : 0;
-        balanceText += `- ${data.name || data.label}: ${bal} ${data.currency || ''}\n`;
+        const isSelected = doc.id === selectedAccountId;
+        balanceText += `${isSelected ? '⭐️ ' : '- '}${data.name || data.label || 'Без названия'}: ${bal} ${data.currency || ''}${isSelected ? ' (активный)' : ''}\n`;
         total += bal;
     });
     balanceText += `\nОбщий баланс: ${total}`;
@@ -142,7 +150,27 @@ async function _finalizeTransaction(userId, amount, description, categoryId) {
     const accSnapshot = await accountsRef.where('userId', '==', userId).get();
     if (accSnapshot.empty) throw new Error('У вас нет счетов в приложении Summa.');
     
-    const accountDoc = accSnapshot.docs[0];
+    // Получаем выбранный счет
+    let accountDoc = null;
+    const telegramUserSnapshot = await db.collection('telegram_users').where('firebase_uid', '==', userId).get();
+    if (!telegramUserSnapshot.empty) {
+        const tgUser = telegramUserSnapshot.docs[0].data();
+        if (tgUser.selected_account_id) {
+            accountDoc = accSnapshot.docs.find(doc => doc.id === tgUser.selected_account_id);
+        }
+    }
+    
+    // Если счет не выбран или не найден в списке счетов, берем первый по умолчанию
+    if (!accountDoc) {
+        accountDoc = accSnapshot.docs[0];
+        // Запоминаем его как выбранный
+        if (!telegramUserSnapshot.empty) {
+            await db.collection('telegram_users').doc(telegramUserSnapshot.docs[0].id).update({
+                selected_account_id: accountDoc.id
+            });
+        }
+    }
+    
     const accountId = accountDoc.id; 
     const currentBalance = accountDoc.data().balance || 0;
     
@@ -299,6 +327,51 @@ async function getRecentTransactions(userId) {
     return txs.slice(0, 5);
 }
 
+async function getUserAccounts(userId) {
+    const accountsSnapshot = await db.collection('accounts').where('userId', '==', userId).get();
+    if (accountsSnapshot.empty) return { accounts: [], selectedAccountId: null };
+    
+    const accounts = accountsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    
+    let selectedAccountId = null;
+    const telegramUserSnapshot = await db.collection('telegram_users').where('firebase_uid', '==', userId).get();
+    if (!telegramUserSnapshot.empty) {
+        selectedAccountId = telegramUserSnapshot.docs[0].data().selected_account_id || null;
+    }
+    
+    // Если в telegram_users нет выбранного аккаунта, но счета есть, то по умолчанию первый
+    if (!selectedAccountId && accounts.length > 0) {
+        selectedAccountId = accounts[0].id;
+        if (!telegramUserSnapshot.empty) {
+            await db.collection('telegram_users').doc(telegramUserSnapshot.docs[0].id).update({
+                selected_account_id: selectedAccountId
+            });
+        }
+    }
+    
+    return { accounts, selectedAccountId };
+}
+
+async function selectUserAccount(userId, accountId) {
+    // Проверим, что счет принадлежит пользователю
+    const accountDoc = await db.collection('accounts').doc(accountId).get();
+    if (!accountDoc.exists || accountDoc.data().userId !== userId) {
+        throw new Error("Счет не найден или у вас нет к нему доступа.");
+    }
+    
+    const telegramUserSnapshot = await db.collection('telegram_users').where('firebase_uid', '==', userId).get();
+    if (telegramUserSnapshot.empty) {
+        throw new Error("Пользователь Telegram не привязан к Firebase UID.");
+    }
+    
+    await db.collection('telegram_users').doc(telegramUserSnapshot.docs[0].id).update({
+        selected_account_id: accountId,
+        updatedAt: new Date().toISOString()
+    });
+    
+    return accountDoc.data().name || accountDoc.data().label;
+}
+
 module.exports = {
     getUserIdByTelegramId,
     linkTelegramToFirebase,
@@ -308,5 +381,7 @@ module.exports = {
     commitTransaction,
     deleteTransaction,
     getRecentTransactions,
-    addNewCategoryAndCommit
+    addNewCategoryAndCommit,
+    getUserAccounts,
+    selectUserAccount
 };
