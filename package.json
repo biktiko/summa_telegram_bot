@@ -1,0 +1,19 @@
+{
+  "name": "summatelegrambot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "firebase-admin": "^13.10.0",
+    "telegraf": "^4.16.3"
+  }
+}
